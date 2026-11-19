@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>body{margin:0}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Floorplan Editor</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout : table à dessin — toolbar en haut, plan à gauche, panneau de propriétés à droite, 3D en overlay. */
+:root{
+  --paper:#f3f1ec; --paper-2:#e9e6df; --ink:#1f2430; --ink-2:#5b6170; --line:#cfcbc2;
+  --accent:#1f5fa8; --accent-soft:#1f5fa822; --wall:#3b3f4a; --wall-fill:#9a9ea8;
+  --win:#2b7bd6; --door:#b5651d; --open:#2e9e4f; --warn:#c0392b;
+  --font:"IBM Plex Sans",system-ui,sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --paper:#1c1e24; --paper-2:#262932; --ink:#e8e6e0; --ink-2:#a3a7b3; --line:#3a3e49;
+  --accent:#6ea4e8; --accent-soft:#6ea4e833; --wall:#d6d8de; --wall-fill:#5c6070;
+  --win:#5aa0f0; --door:#d98a45; --open:#4fc070; --warn:#e8705f; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --paper:#1c1e24; --paper-2:#262932; --ink:#e8e6e0; --ink-2:#a3a7b3; --line:#3a3e49;
+  --accent:#6ea4e8; --accent-soft:#6ea4e833; --wall:#d6d8de; --wall-fill:#5c6070;
+  --win:#5aa0f0; --door:#d98a45; --open:#4fc070; --warn:#e8705f; color-scheme:dark}
+html,body{height:100%}
+body{background:var(--paper);color:var(--ink);font-family:var(--font);font-size:13px;display:flex;flex-direction:column;overflow:hidden}
+button,input,select,textarea{font:inherit;color:inherit}
+button{background:var(--paper-2);border:1px solid var(--line);border-radius:4px;padding:5px 9px;cursor:pointer}
+button:hover{border-color:var(--accent)}
+button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+input[type=number],input[type=text],select,textarea{background:var(--paper);border:1px solid var(--line);border-radius:4px;padding:4px 6px;width:100%;min-width:0}
+input[type=number]{font-family:var(--mono);font-variant-numeric:tabular-nums}
+header{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 16px;border-bottom:1px solid var(--line);background:var(--paper-2)}
+header h1{font-size:15px;font-weight:600;margin:0 10px 0 0}
+.group{display:flex;gap:4px;align-items:center}
+.sep{width:1px;height:22px;background:var(--line);margin:0 4px}
+main{flex:1;display:flex;min-height:0}
+#plan{flex:1;position:relative;min-width:0;background:var(--paper)}
+#cv{position:absolute;inset:0;width:100%;height:100%;touch-action:none;cursor:crosshair}
+#hint{position:absolute;left:12px;right:150px;bottom:10px;font-size:12px;color:var(--ink-2);pointer-events:none;background:var(--paper);padding:2px 6px;border-radius:3px}
+#zoomctl{position:absolute;right:12px;bottom:10px;display:flex;gap:4px}
+aside{width:300px;border-left:1px solid var(--line);background:var(--paper-2);overflow-y:auto;padding:12px 16px;display:flex;flex-direction:column;gap:14px}
+aside h2{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink-2);margin:0 0 6px}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+label.f{display:flex;flex-direction:column;gap:2px;font-size:11px;color:var(--ink-2)}
+.actions{display:flex;flex-wrap:wrap;gap:4px}
+.danger{color:var(--warn)}
+.note{font-size:11px;color:var(--ink-2);line-height:1.4}
+.pill{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;background:var(--accent-soft);color:var(--accent);font-family:var(--mono)}
+textarea{font-family:var(--mono);font-size:11px;min-height:120px;resize:vertical}
+#view3d{position:absolute;inset:0;background:var(--paper);display:flex;flex-direction:column}
+#view3d[hidden]{display:none}
+#view3d canvas{flex:1;width:100%;min-height:0;touch-action:none}
+#bar3d{display:flex;gap:6px;padding:6px 12px;border-bottom:1px solid var(--line);background:var(--paper-2);align-items:center;flex-wrap:wrap}
+#toast{position:absolute;top:10px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--paper);padding:6px 12px;border-radius:4px;font-size:12px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+@media (max-width:760px){
+  main{flex-direction:column}
+  aside{width:auto;border-left:0;border-top:1px solid var(--line);max-height:45%}
+}
+@media (prefers-reduced-motion:reduce){#toast{transition:none}}
+</style>
+
+<header>
+  <h1>Floorplan Editor</h1>
+  <div class="group" id="modes">
+    <button data-mode="select" class="on" title="Sélectionner, déplacer (S)">Sélection</button>
+    <button data-mode="wall" title="Tracer un mur (M)">Mur</button>
+    <button data-mode="room" title="Dessiner une pièce point par point (P)">Pièce</button>
+    <button data-mode="pan" title="Déplacer la vue (espace)">Main</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="undo" title="Annuler (Ctrl+Z)">Annuler</button>
+    <button id="redo" title="Rétablir (Ctrl+Y)">Rétablir</button>
+  </div>
+  <div class="sep"></div>
+  <div class="group">
+    <button id="btn3d">Vue 3D</button>
+    <button id="btnExport">Exporter</button>
+    <button id="btnSave">Sauver JSON</button>
+    <button id="btnLoad">Charger JSON</button>
+    <input type="file" id="fileLoad" accept=".json,application/json" hidden>
+  </div>
+</header>
+
+<main>
+  <div id="plan">
+    <canvas id="cv"></canvas>
+    <div id="hint"></div>
+    <div id="zoomctl"><button id="zin">+</button><button id="zout">−</button><button id="zfit">Ajuster</button></div>
+    <div id="view3d" hidden>
+      <div id="bar3d">
+        <button id="close3d">← Plan</button>
+        <span class="note">Glisser : tourner · molette : zoom · clic droit ou Maj+glisser : déplacer</span>
+        <label class="note"><input type="checkbox" id="furn3d" checked> meubles</label>
+        <label class="note"><input type="checkbox" id="floor3d" checked> sols</label>
+      </div>
+      <canvas id="cv3"></canvas>
+    </div>
+    <div id="toast"></div>
+  </div>
+  <aside id="side"></aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+'use strict';
+// ------------------------------------------------------------------ données
+const INITIAL = {"t":10,"h":250,"walls":[{"id":"w1","x1":0,"y1":0,"x2":500,"y2":0,"t":10,"h":250,"side":1},{"id":"w2","x1":500,"y1":0,"x2":500,"y2":400,"t":10,"h":250,"side":1},{"id":"w3","x1":500,"y1":400,"x2":0,"y2":400,"t":10,"h":250,"side":1},{"id":"w4","x1":0,"y1":400,"x2":0,"y2":0,"t":10,"h":250,"side":1}],"openings":[{"id":"o1","wall":"w1","type":"fenetre","pos":180,"w":140,"z0":90,"z1":215},{"id":"o2","wall":"w3","type":"porte","pos":60,"w":90,"z0":0,"z1":210,"hinge":"start","out":false}],"rooms":[{"id":"r1","name":"Pièce","pts":[[0,0],[500,0],[500,400],[0,400]]}],"furn":[{"id":"f1","name":"Canapé 3 places","x":110,"y":200,"w":220,"d":95,"h":85,"rot":270,"color":"#8a9bb0"},{"id":"f2","name":"Table basse","x":250,"y":200,"w":110,"d":60,"h":40,"rot":90,"color":"#b89a6a"},{"id":"f3","name":"Meuble TV","x":477.5,"y":200,"w":160,"d":45,"h":50,"rot":90,"color":"#6f6a63"}]};
+const CATALOG=[["Canapé d’angle",290,97,85,"L"],["Canapé 3 places",220,95,85],["Canapé 2 places",170,95,85],["Fauteuil",90,90,85],["Table basse",110,60,40],["Table à manger",160,90,75],["Chaise",45,45,90],["Meuble TV",160,45,50],["Bibliothèque",80,30,200],["Buffet",180,50,85],["Bureau",140,70,75],["Lit 160",160,200,50],["Tapis",200,300,1],["Plante",40,40,120],["Bloc libre",100,100,100]];
+const TYPES={fenetre:{label:"Fenêtre",color:"var(--win)",z0:90,z1:215},porte:{label:"Porte",color:"var(--door)",z0:0,z1:210},ouverture:{label:"Ouverture",color:"var(--open)",z0:0,z1:250}};
+let S=null, hist=[], hpos=-1;
+const clone=o=>JSON.parse(JSON.stringify(o));
+function loadInitial(){
+  try{const s=localStorage.getItem('floorplan-editor-v1'); if(s){S=JSON.parse(s);return;}}catch(e){}
+  S=clone(INITIAL);
+}
+function commit(){ // enregistre un état dans l'historique
+  hist=hist.slice(0,hpos+1); hist.push(clone(S)); if(hist.length>80)hist.shift(); hpos=hist.length-1;
+  try{localStorage.setItem('floorplan-editor-v1',JSON.stringify(S));}catch(e){}
+  draw(); if(!v3.hidden) build3d();
+}
+function undo(){ if(hpos>0){hpos--;S=clone(hist[hpos]);sel=null;refresh();} }
+function redo(){ if(hpos<hist.length-1){hpos++;S=clone(hist[hpos]);sel=null;refresh();} }
+let idc=1000; const uid=p=>p+(idc++);
+
+// ------------------------------------------------------------------ géométrie
+const EPS=0.6;
+function wgeo(w){ const dx=w.x2-w.x1,dy=w.y2-w.y1,L=Math.hypot(dx,dy)||1; return {L,ux:dx/L,uy:dy/L,nx:dy/L*(w.side||1),ny:-dx/L*(w.side||1)}; }
+function wp(w,g,u,v){ return [w.x1+g.ux*u+g.nx*v, w.y1+g.uy*u+g.ny*v]; }
+function near(a,b){ return Math.hypot(a[0]-b[0],a[1]-b[1])<EPS; }
+function lineInter(p,d,q,e){ const den=d[0]*e[1]-d[1]*e[0]; if(Math.abs(den)<1e-9)return null; const t=((q[0]-p[0])*e[1]-(q[1]-p[1])*e[0])/den; return [p[0]+d[0]*t,p[1]+d[1]*t]; }
+// point de coupe en onglet à une extrémité (end=0 début, 1 fin)
+function miter(w,g,end){
+  const P=end?[w.x2,w.y2]:[w.x1,w.y1];
+  const def=wp(w,g,end?g.L:0,w.t);
+  for(const o of S.walls){ if(o===w)continue;
+    let oe=-1; if(near([o.x1,o.y1],P))oe=0; else if(near([o.x2,o.y2],P))oe=1; if(oe<0)continue;
+    const og=wgeo(o);
+    const p1=wp(w,g,0,w.t), p2=wp(o,og,0,o.t);
+    const m=lineInter(p1,[g.ux,g.uy],p2,[og.ux,og.uy]);
+    if(!m)continue;
+    if(Math.hypot(m[0]-P[0],m[1]-P[1])>3*Math.max(w.t,o.t)+1)continue;
+    return m;
+  }
+  return def;
+}
+function wallPoly(w){ const g=wgeo(w); return [wp(w,g,0,0),wp(w,g,g.L,0),miter(w,g,1),miter(w,g,0)]; }
+function wallOpenings(w){ return S.openings.filter(o=>o.wall===w.id).sort((a,b)=>a.pos-b.pos); }
+// morceaux 3D d'un mur : liste de {quad:[4 pts], z0, z1}
+function wallPieces(w){
+  const g=wgeo(w), L=g.L, h=w.h, ms=miter(w,g,0), me=miter(w,g,1), out=[];
+  const quad=(u0,u1)=>[wp(w,g,u0,0),wp(w,g,u1,0),u1>=L-1e-6?me:wp(w,g,u1,w.t),u0<=1e-6?ms:wp(w,g,u0,w.t)];
+  let u=0;
+  for(const o of wallOpenings(w)){
+    const a=Math.max(u,Math.min(L,o.pos)), b=Math.max(a,Math.min(L,o.pos+o.w));
+    if(a>u+1e-6) out.push({quad:quad(u,a),z0:0,z1:h});
+    if(b>a+1e-6){ if(o.z0>0) out.push({quad:quad(a,b),z0:0,z1:Math.min(o.z0,h)}); if(o.z1<h) out.push({quad:quad(a,b),z0:Math.max(o.z1,0),z1:h}); }
+    u=b;
+  }
+  if(u<L-1e-6) out.push({quad:quad(u,L),z0:0,z1:h});
+  return out;
+}
+function polyArea(p){ let a=0; for(let i=0;i<p.length;i++){const q=p[(i+1)%p.length];a+=p[i][0]*q[1]-q[0]*p[i][1];} return a/2; }
+function inPoly(pt,p){ let c=false; for(let i=0,j=p.length-1;i<p.length;j=i++){ const a=p[i],b=p[j]; if((a[1]>pt[1])!==(b[1]>pt[1]) && pt[0]<(b[0]-a[0])*(pt[1]-a[1])/(b[1]-a[1])+a[0]) c=!c;} return c; }
+function furnCorners(f){ const r=f.rot*Math.PI/180,c=Math.cos(r),s=Math.sin(r); let loc;
+  if(f.shape==='L'){ const W=f.w,D=f.d,W2=f.w2||100,D2=Math.max(f.d2||180,D); // bloc arrière W×D, retour W2×D2 à gauche (dos en haut) ou à droite
+    loc=f.corner==='droite'?[[0,0],[W,0],[W,D2],[W-W2,D2],[W-W2,D],[0,D]]:[[0,0],[W,0],[W,D],[W2,D],[W2,D2],[0,D2]];
+    loc=loc.map(([x,y])=>[x-W/2,y-D2/2]); }
+  else loc=[[-f.w/2,-f.d/2],[f.w/2,-f.d/2],[f.w/2,f.d/2],[-f.w/2,f.d/2]];
+  return loc.map(([x,y])=>[f.x+x*c-y*s,f.y+x*s+y*c]); }
+function distSeg(p,a,b){ const dx=b[0]-a[0],dy=b[1]-a[1],l2=dx*dx+dy*dy; let t=l2?((p[0]-a[0])*dx+(p[1]-a[1])*dy)/l2:0; t=Math.max(0,Math.min(1,t)); return Math.hypot(p[0]-a[0]-t*dx,p[1]-a[1]-t*dy); }
+// déplace un sommet et tous les sommets de murs qui coïncident
+function moveVertex(w,end,nx,ny){
+  const P=end?[w.x2,w.y2]:[w.x1,w.y1];
+  for(const o of S.walls){ if(near([o.x1,o.y1],P)){o.x1=nx;o.y1=ny;} if(near([o.x2,o.y2],P)){o.x2=nx;o.y2=ny;} }
+  for(const r of S.rooms) for(const p of r.pts) if(near(p,P)){p[0]=nx;p[1]=ny;}
+}
+// oriente l'épaisseur de chaque mur vers l'extérieur de la boucle qu'il forme avec ses voisins
+function orientWalls(){
+  const seen=new Set(); let changed=0;
+  for(const w0 of S.walls){ if(seen.has(w0))continue;
+    const chain=[{w:w0,fwd:true}]; seen.add(w0); const first=[w0.x1,w0.y1]; let P=[w0.x2,w0.y2]; const pts=[first,P];
+    for(let k=0;k<500;k++){ if(near(P,first))break;
+      const nx=S.walls.find(o=>!seen.has(o)&&(near([o.x1,o.y1],P)||near([o.x2,o.y2],P))); if(!nx)break;
+      const fwd=near([nx.x1,nx.y1],P); seen.add(nx); chain.push({w:nx,fwd}); P=fwd?[nx.x2,nx.y2]:[nx.x1,nx.y1]; pts.push(P); }
+    let Q=first; for(let k=0;k<500;k++){ if(near(Q,P))break;
+      const nx=S.walls.find(o=>!seen.has(o)&&(near([o.x1,o.y1],Q)||near([o.x2,o.y2],Q))); if(!nx)break;
+      const fwd=near([nx.x2,nx.y2],Q); seen.add(nx); chain.unshift({w:nx,fwd}); Q=fwd?[nx.x1,nx.y1]:[nx.x2,nx.y2]; pts.unshift(Q); }
+    if(chain.length<2)continue;
+    const sgn=polyArea(pts)>0?1:-1;
+    for(const c of chain){ const want=sgn*(c.fwd?1:-1); if((c.w.side||1)!==want){c.w.side=want;changed++;} }
+  }
+  return changed;
+}
+// aimante un meuble aux faces intérieures des murs (deux passes : un mur, puis un mur non parallèle pour caler dans un angle)
+function snapFurn(f){
+  const tol=Math.max(8,14/view.z); let first=null;
+  for(let pass=0;pass<2;pass++){
+    const c=furnCorners(f); let best=null;
+    for(const w of S.walls){ const g=wgeo(w); const inx=-g.nx,iny=-g.ny; // normale vers la pièce
+      if(first&&Math.abs(inx*first[0]+iny*first[1])>0.7)continue;
+      for(const q of c){ const u=(q[0]-w.x1)*g.ux+(q[1]-w.y1)*g.uy; if(u<-tol||u>g.L+tol)continue;
+        const dist=(q[0]-w.x1)*inx+(q[1]-w.y1)*iny; // >0 : côté pièce
+        if(Math.abs(dist)<tol&&(!best||Math.abs(dist)<Math.abs(best.dist)))best={dist,inx,iny}; } }
+    if(!best)break;
+    f.x=Math.round((f.x-best.dist*best.inx)*10)/10; f.y=Math.round((f.y-best.dist*best.iny)*10)/10; first=[best.inx,best.iny];
+  }
+}
+// trace la pièce fermée délimitée par les murs à partir d'un mur
+function traceRoom(start){
+  const ends=w=>[[w.x1,w.y1],[w.x2,w.y2]];
+  let pts=[[start.x1,start.y1]], cur=start, P=[start.x2,start.y2], prevDir=Math.atan2(start.y2-start.y1,start.x2-start.x1);
+  for(let k=0;k<200;k++){
+    pts.push(P);
+    if(near(P,pts[0])&&k>0){pts.pop();return pts;}
+    let best=null,bestA=1e9;
+    for(const o of S.walls){ if(o===cur)continue; const e=ends(o); let far=null;
+      if(near(e[0],P))far=e[1]; else if(near(e[1],P))far=e[0]; if(!far)continue;
+      const d=Math.atan2(far[1]-P[1],far[0]-P[0]); let a=d-prevDir; while(a<=-Math.PI)a+=2*Math.PI; while(a>Math.PI)a-=2*Math.PI;
+      a=(start.side||1)>0? a : -a; // tourne du côté intérieur en priorité
+      const score=Math.PI-a; if(score<bestA){bestA=score;best={o,far,d};}
+    }
+    if(!best)return null;
+    cur=best.o;P=best.far;prevDir=best.d;
+  }
+  return null;
+}
+
+// ------------------------------------------------------------------ vue 2D
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+let view={z:1,ox:60,oy:60}, mode='select', sel=null, drag=null, tmp=null, mouse=null, hover=null;
+const w2s=(x,y)=>[x*view.z+view.ox,y*view.z+view.oy], s2w=(x,y)=>[(x-view.ox)/view.z,(y-view.oy)/view.z];
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function resize(){ const r=cv.parentElement.getBoundingClientRect(); cv.width=r.width*devicePixelRatio; cv.height=r.height*devicePixelRatio; cv.style.width=r.width+'px'; cv.style.height=r.height+'px'; draw(); }
+function fit(){ const xs=[],ys=[]; for(const w of S.walls){xs.push(w.x1,w.x2);ys.push(w.y1,w.y2);} for(const f of S.furn){xs.push(f.x);ys.push(f.y);} if(!xs.length){xs.push(0,400);ys.push(0,400);}
+  const minx=Math.min(...xs)-40,maxx=Math.max(...xs)+40,miny=Math.min(...ys)-40,maxy=Math.max(...ys)+40, W=cv.width/devicePixelRatio,H=cv.height/devicePixelRatio;
+  view.z=Math.min(W/(maxx-minx),H/(maxy-miny)); view.ox=(W-(maxx+minx)*view.z)/2; view.oy=(H-(maxy+miny)*view.z)/2; draw(); }
+function draw(){
+  if(!S)return;
+  const W=cv.width/devicePixelRatio,H=cv.height/devicePixelRatio;
+  ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0); ctx.clearRect(0,0,W,H);
+  ctx.fillStyle=css('--paper'); ctx.fillRect(0,0,W,H);
+  // grille 50 cm
+  const step=view.z>0.25?50:100; ctx.strokeStyle=css('--line'); ctx.lineWidth=.5; ctx.beginPath();
+  const [x0,y0]=s2w(0,0),[x1,y1]=s2w(W,H);
+  for(let x=Math.floor(x0/step)*step;x<x1;x+=step){const [sx]=w2s(x,0);ctx.moveTo(sx,0);ctx.lineTo(sx,H);}
+  for(let y=Math.floor(y0/step)*step;y<y1;y+=step){const [,sy]=w2s(0,y);ctx.moveTo(0,sy);ctx.lineTo(W,sy);} ctx.stroke();
+  ctx.font='12px '+css('--mono');
+  // pièces
+  for(const r of S.rooms){ if(r.pts.length<3)continue; ctx.beginPath(); r.pts.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);}); ctx.closePath();
+    ctx.fillStyle=sel&&sel.kind==='room'&&sel.obj===r?css('--accent-soft'):'rgba(150,130,90,.10)'; ctx.fill();
+    ctx.strokeStyle=css('--ink-2'); ctx.setLineDash([3,3]); ctx.lineWidth=1; ctx.stroke(); ctx.setLineDash([]);
+    const c=r.pts.reduce((a,p)=>[a[0]+p[0]/r.pts.length,a[1]+p[1]/r.pts.length],[0,0]); const s=w2s(c[0],c[1]);
+    ctx.fillStyle=css('--ink-2'); ctx.textAlign='center'; ctx.fillText(r.name+' · '+(Math.abs(polyArea(r.pts))/1e4).toFixed(2)+' m²',s[0],s[1]); }
+  // murs
+  for(const w of S.walls){ const poly=wallPoly(w); ctx.beginPath(); poly.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);}); ctx.closePath();
+    const isSel=sel&&sel.kind==='wall'&&sel.obj===w; ctx.fillStyle=isSel?css('--accent'):css('--wall-fill'); ctx.fill(); ctx.strokeStyle=css('--wall'); ctx.lineWidth=1; ctx.stroke();
+    const g=wgeo(w);
+    for(const o of wallOpenings(w)){ const a=Math.max(0,o.pos),b=Math.min(g.L,o.pos+o.w); if(b<=a)continue; const q=[wp(w,g,a,0),wp(w,g,b,0),wp(w,g,b,w.t),wp(w,g,a,w.t)];
+      ctx.beginPath(); q.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);}); ctx.closePath();
+      const col=css(TYPES[o.type].color.slice(4,-1)); ctx.fillStyle=o.type==='ouverture'?css('--paper'):col; ctx.fill(); ctx.strokeStyle=col; ctx.lineWidth=sel&&sel.obj===o?3:1.5; if(o.type==='ouverture')ctx.setLineDash([4,3]); ctx.stroke(); ctx.setLineDash([]);
+      if(o.type==='porte'){ const hingeEnd=o.hinge==='end'; const Hp=wp(w,g,hingeEnd?b:a,0),Fp=wp(w,g,hingeEnd?a:b,0),s=w2s(Hp[0],Hp[1]),R=(b-a)*view.z;
+        const a0=Math.atan2(Fp[1]-Hp[1],Fp[0]-Hp[0]), a1=o.out?Math.atan2(g.ny,g.nx):Math.atan2(-g.ny,-g.nx); let dlt=a1-a0; while(dlt>Math.PI)dlt-=2*Math.PI; while(dlt<=-Math.PI)dlt+=2*Math.PI;
+        ctx.beginPath(); ctx.arc(s[0],s[1],R,a0,a1,dlt<0); ctx.strokeStyle=col; ctx.lineWidth=1; ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(s[0],s[1]); ctx.lineTo(s[0]+R*Math.cos(a1),s[1]+R*Math.sin(a1)); ctx.lineWidth=2; ctx.stroke(); }
+      if(view.z>0.35){ const m=wp(w,g,(a+b)/2,w.t+14/view.z),s=w2s(m[0],m[1]); ctx.fillStyle=col; ctx.textAlign='center'; ctx.fillText(TYPES[o.type].label[0]+' '+Math.round(b-a),s[0],s[1]+4); }
+    }
+    // cote
+    if(view.z>0.3||isSel){ const m=wp(w,g,g.L/2,-13/view.z),s=w2s(m[0],m[1]); ctx.fillStyle=isSel?css('--accent'):css('--ink'); ctx.textAlign='center'; ctx.fillText(fmt(g.L),s[0],s[1]+4); }
+    if(isSel){ for(const p of [[w.x1,w.y1],[w.x2,w.y2]]){ const s=w2s(p[0],p[1]); ctx.beginPath(); ctx.arc(s[0],s[1],6,0,7); ctx.fillStyle=css('--paper'); ctx.fill(); ctx.strokeStyle=css('--accent'); ctx.lineWidth=2; ctx.stroke(); } }
+  }
+  // meubles
+  for(const f of S.furn){ const c=furnCorners(f); ctx.beginPath(); c.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);}); ctx.closePath();
+    ctx.fillStyle=f.color+'99'; ctx.fill(); ctx.strokeStyle=sel&&sel.obj===f?css('--accent'):css('--ink-2'); ctx.lineWidth=sel&&sel.obj===f?2.5:1; ctx.stroke();
+    const s=w2s(f.x,f.y); ctx.fillStyle=css('--ink'); ctx.textAlign='center'; if(view.z*Math.min(f.w,f.d)>28) ctx.fillText(f.name,s[0],s[1]+4); }
+  // tracé en cours
+  if(tmp){ ctx.strokeStyle=css('--accent'); ctx.lineWidth=2; ctx.setLineDash([6,4]); ctx.beginPath();
+    tmp.pts.forEach((p,i)=>{const s=w2s(p[0],p[1]); i?ctx.lineTo(s[0],s[1]):ctx.moveTo(s[0],s[1]);}); if(mouse){const s=w2s(mouse[0],mouse[1]);ctx.lineTo(s[0],s[1]);} ctx.stroke(); ctx.setLineDash([]);
+    if(mouse&&tmp.pts.length){ const a=tmp.pts[tmp.pts.length-1],L=Math.hypot(mouse[0]-a[0],mouse[1]-a[1]),s=w2s((a[0]+mouse[0])/2,(a[1]+mouse[1])/2); ctx.fillStyle=css('--accent'); ctx.textAlign='center'; ctx.fillText(fmt(L),s[0],s[1]-8); } }
+  if(hover){ const s=w2s(hover[0],hover[1]); ctx.beginPath(); ctx.arc(s[0],s[1],5,0,7); ctx.strokeStyle=css('--accent'); ctx.lineWidth=1.5; ctx.stroke(); }
+  // échelle
+  ctx.fillStyle=css('--ink'); ctx.fillRect(W-120,H-28,100*view.z>W-40?50*view.z:100*view.z,2); ctx.textAlign='left'; ctx.fillText(100*view.z>W-40?'50 cm':'1 m',W-120,H-34);
+}
+const fmt=v=>(Math.round(v*10)/10).toString().replace('.',',');
+
+// ------------------------------------------------------------------ interactions 2D
+let ptrs=new Map(), pinch=null;
+function snapPt(p,excludeWall){
+  let best=null,bd=10/view.z;
+  for(const w of S.walls){ if(w===excludeWall)continue; for(const q of [[w.x1,w.y1],[w.x2,w.y2]]){ const d=Math.hypot(p[0]-q[0],p[1]-q[1]); if(d<bd){bd=d;best=q;} } }
+  if(best)return [best[0],best[1]];
+  return [Math.round(p[0]),Math.round(p[1])];
+}
+function ortho(a,p){ const dx=p[0]-a[0],dy=p[1]-a[1]; if(Math.abs(dx)>Math.abs(dy)*8)return [p[0],a[1]]; if(Math.abs(dy)>Math.abs(dx)*8)return [a[0],p[1]]; return p; }
+function hit(p){
+  const tol=6/view.z;
+  for(const w of S.walls){ const g=wgeo(w); for(const o of wallOpenings(w)){ const q=[wp(w,g,o.pos,0),wp(w,g,o.pos+o.w,0),wp(w,g,o.pos+o.w,w.t),wp(w,g,o.pos,w.t)]; if(inPoly(p,q))return {kind:'opening',obj:o,wall:w}; } }
+  for(let i=S.furn.length-1;i>=0;i--){ if(inPoly(p,furnCorners(S.furn[i])))return {kind:'furn',obj:S.furn[i]}; }
+  for(const w of S.walls){ if(inPoly(p,wallPoly(w))||distSeg(p,[w.x1,w.y1],[w.x2,w.y2])<tol)return {kind:'wall',obj:w}; }
+  for(const r of S.rooms){ if(inPoly(p,r.pts))return {kind:'room',obj:r}; }
+  return null;
+}
+cv.addEventListener('pointerdown',e=>{
+  cv.setPointerCapture(e.pointerId); ptrs.set(e.pointerId,[e.offsetX,e.offsetY]);
+  if(ptrs.size===2){ const a=[...ptrs.values()]; pinch={d:Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]),z:view.z,c:[(a[0][0]+a[1][0])/2,(a[0][1]+a[1][1])/2],ox:view.ox,oy:view.oy}; drag=null; return; }
+  const p=s2w(e.offsetX,e.offsetY);
+  if(mode==='pan'||e.button===1||(mode==='select'&&e.shiftKey)){ drag={kind:'pan',sx:e.offsetX,sy:e.offsetY,ox:view.ox,oy:view.oy}; return; }
+  if(e.button===2)return;
+  if(mode==='wall'){ let q=snapPt(p); if(tmp&&tmp.pts.length)q=ortho(tmp.pts[tmp.pts.length-1],q); q=snapPt(q);
+    if(!tmp)tmp={pts:[q]}; else { const a=tmp.pts[tmp.pts.length-1]; if(Math.hypot(q[0]-a[0],q[1]-a[1])>=1){ S.walls.push({id:uid('w'),x1:a[0],y1:a[1],x2:q[0],y2:q[1],t:S.t,h:S.h,side:1}); orientWalls(); commit(); } tmp={pts:[q]}; if(e.detail>=2){tmp=null;} }
+    draw(); return; }
+  if(mode==='room'){ const q=snapPt(p); if(!tmp)tmp={pts:[q],room:true}; else{ if(near(q,tmp.pts[0])&&tmp.pts.length>2){ finishRoom(); return;} tmp.pts.push(q);} draw(); return; }
+  // sélection
+  if(sel&&sel.kind==='wall'){ const w=sel.obj; for(const end of [0,1]){ const q=end?[w.x2,w.y2]:[w.x1,w.y1]; const s=w2s(q[0],q[1]); if(Math.hypot(s[0]-e.offsetX,s[1]-e.offsetY)<9){ drag={kind:'vertex',w,end}; return; } } }
+  const h=hit(p); sel=h; renderSide(); draw();
+  if(h&&h.kind==='furn') drag={kind:'furn',f:h.obj,dx:h.obj.x-p[0],dy:h.obj.y-p[1],moved:false};
+  else if(h&&h.kind==='opening') drag={kind:'opening',o:h.obj,w:h.wall,moved:false};
+  else if(h&&h.kind==='wall') drag={kind:'wall',w:h.obj,start:p,orig:clone(h.obj),moved:false};
+  else drag={kind:'pan',sx:e.offsetX,sy:e.offsetY,ox:view.ox,oy:view.oy};
+});
+cv.addEventListener('pointermove',e=>{
+  if(ptrs.has(e.pointerId))ptrs.set(e.pointerId,[e.offsetX,e.offsetY]);
+  if(pinch&&ptrs.size===2){ const a=[...ptrs.values()]; const d=Math.hypot(a[0][0]-a[1][0],a[0][1]-a[1][1]); const z=Math.max(.05,Math.min(8,pinch.z*d/pinch.d)); const c=[(a[0][0]+a[1][0])/2,(a[0][1]+a[1][1])/2];
+    view.ox=c[0]-(pinch.c[0]-pinch.ox)*z/pinch.z; view.oy=c[1]-(pinch.c[1]-pinch.oy)*z/pinch.z; view.z=z; draw(); return; }
+  const p=s2w(e.offsetX,e.offsetY); mouse=p;
+  if(!drag){ if(mode==='wall'||mode==='room'){ let q=snapPt(p); if(tmp&&tmp.pts.length&&mode==='wall')q=snapPt(ortho(tmp.pts[tmp.pts.length-1],q)); mouse=q; hover=q; draw(); } return; }
+  if(drag.kind==='pan'){ view.ox=drag.ox+e.offsetX-drag.sx; view.oy=drag.oy+e.offsetY-drag.sy; draw(); return; }
+  if(drag.kind==='vertex'){ const q=snapPt(p,drag.w); moveVertex(drag.w,drag.end,q[0],q[1]); drag.moved=true; draw(); renderSide(); return; }
+  if(drag.kind==='furn'){ drag.f.x=Math.round(p[0]+drag.dx); drag.f.y=Math.round(p[1]+drag.dy); if(!(e.ctrlKey||e.metaKey))snapFurn(drag.f); drag.moved=true; draw(); renderSide(); return; }
+  if(drag.kind==='opening'){ const g=wgeo(drag.w); const u=(p[0]-drag.w.x1)*g.ux+(p[1]-drag.w.y1)*g.uy; drag.o.pos=Math.round(Math.max(0,Math.min(g.L-drag.o.w,u-drag.o.w/2))); drag.moved=true; draw(); renderSide(); return; }
+  if(drag.kind==='wall'){ const dx=Math.round(p[0]-drag.start[0]),dy=Math.round(p[1]-drag.start[1]); if(!drag.moved&&Math.hypot(dx,dy)*view.z<4)return;
+    const w=drag.w,o=drag.orig; // translation du mur seul (sommets détachés)
+    w.x1=o.x1+dx;w.y1=o.y1+dy;w.x2=o.x2+dx;w.y2=o.y2+dy; drag.moved=true; draw(); renderSide(); return; }
+});
+function endDrag(e){ ptrs.delete(e.pointerId); if(ptrs.size<2)pinch=null; if(drag){ if(drag.moved)commit(); drag=null; } }
+cv.addEventListener('pointerup',endDrag); cv.addEventListener('pointercancel',endDrag);
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('wheel',e=>{ e.preventDefault(); const k=Math.exp(-e.deltaY*0.0012); const z=Math.max(.05,Math.min(8,view.z*k)); view.ox=e.offsetX-(e.offsetX-view.ox)*z/view.z; view.oy=e.offsetY-(e.offsetY-view.oy)*z/view.z; view.z=z; draw(); },{passive:false});
+cv.addEventListener('dblclick',()=>{ if(mode==='room'&&tmp&&tmp.pts.length>=3)finishRoom(); else if(mode==='wall'){tmp=null;draw();} });
+function finishRoom(){ const pts=tmp.pts; tmp=null; if(pts.length>=3){ S.rooms.push({id:uid('r'),name:'Pièce '+(S.rooms.length+1),pts}); sel={kind:'room',obj:S.rooms[S.rooms.length-1]}; commit(); renderSide(); } draw(); }
+function setMode(m){ mode=m; tmp=null; hover=null; document.querySelectorAll('#modes button').forEach(b=>b.classList.toggle('on',b.dataset.mode===m));
+  cv.style.cursor=m==='pan'?'grab':m==='select'?'default':'crosshair';
+  document.getElementById('hint').textContent={select:'Cliquer pour sélectionner · glisser un meuble (aimanté aux murs, Ctrl pour désactiver), R pour le tourner de 90° · glisser une ouverture ou un sommet de mur sélectionné · molette : zoom · Maj+glisser : déplacer la vue',wall:'Cliquer le début puis la fin de chaque mur (aimanté aux sommets existants, angles droits automatiques) · double-clic ou Échap pour terminer',room:'Cliquer les sommets de la pièce, refermer sur le premier point ou double-clic',pan:'Glisser pour déplacer la vue'}[m];
+  draw(); }
+document.querySelectorAll('#modes button').forEach(b=>b.onclick=()=>setMode(b.dataset.mode));
+document.addEventListener('keydown',e=>{ if(e.target.matches('input,textarea,select'))return;
+  if(e.key==='Escape'){tmp=null;sel=null;renderSide();draw();}
+  else if((e.ctrlKey||e.metaKey)&&e.key==='z'){e.preventDefault();undo();}
+  else if((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='Z')))  {e.preventDefault();redo();}
+  else if(e.key==='Delete'||e.key==='Backspace'){deleteSel();}
+  else if(e.key==='r'||e.key==='R'){ if(sel&&sel.kind==='furn'){ sel.obj.rot=((sel.obj.rot+(e.shiftKey?15:90))%360+360)%360; if(!(e.ctrlKey||e.metaKey))snapFurn(sel.obj); commit(); renderSide(); } }
+  else if(e.key==='m')setMode('wall'); else if(e.key==='s')setMode('select'); else if(e.key==='p')setMode('room'); else if(e.key===' '){e.preventDefault();setMode('pan');}
+  else if(e.key==='Enter'&&mode==='room'&&tmp&&tmp.pts.length>=3)finishRoom();
+});
+document.getElementById('undo').onclick=undo; document.getElementById('redo').onclick=redo;
+document.getElementById('zin').onclick=()=>{view.z*=1.25;draw();}; document.getElementById('zout').onclick=()=>{view.z/=1.25;draw();}; document.getElementById('zfit').onclick=fit;
+function deleteSel(){ if(!sel)return; const o=sel.obj;
+  if(sel.kind==='wall'){S.walls=S.walls.filter(w=>w!==o);S.openings=S.openings.filter(x=>x.wall!==o.id);}
+  if(sel.kind==='opening')S.openings=S.openings.filter(x=>x!==o); if(sel.kind==='room')S.rooms=S.rooms.filter(x=>x!==o); if(sel.kind==='furn')S.furn=S.furn.filter(x=>x!==o);
+  sel=null; commit(); renderSide(); }
+
+// ------------------------------------------------------------------ panneau latéral
+const side=document.getElementById('side');
+const num=(id,label,val,step)=>`<label class="f">${label}<input type="number" id="${id}" value="${val}" step="${step||1}"></label>`;
+function renderSide(){
+  let h='';
+  if(!sel){
+    h+=`<section><h2>Réglages</h2><div class="row">${num('g_t','Épaisseur mur (cm)',S.t)}${num('g_h','Hauteur mur (cm)',S.h)}</div><p class="note">Valeurs par défaut pour les nouveaux murs. Unités : centimètres, cotes intérieures.</p></section>`;
+    h+=`<section><h2>Ajouter un meuble</h2><div class="row"><select id="cat">${CATALOG.map((c,i)=>`<option value="${i}">${c[0]} (${c[1]}×${c[2]})</option>`).join('')}</select><button id="addFurn">Ajouter</button></div></section>`;
+    h+=`<section><h2>Contenu</h2><p class="note">${S.walls.length} murs · ${S.openings.length} ouvertures · ${S.rooms.length} pièce(s) · ${S.furn.length} meuble(s)<br>Surface des pièces : ${(S.rooms.reduce((a,r)=>a+Math.abs(polyArea(r.pts)),0)/1e4).toFixed(2)} m²</p>
+      <div class="actions"><button id="orient">Orienter les épaisseurs vers l’extérieur</button></div><p class="note">Les traits des murs sont les faces intérieures mesurées ; l’épaisseur est ajoutée vers l’extérieur, les cotes restent donc les mesures intérieures. Ce bouton corrige les murs dont l’épaisseur serait tombée côté pièce.</p><div class="actions"><button id="clearAll" class="danger">Tout effacer</button><button id="resetAll">Revenir à l’exemple</button></div></section>`;
+    h+=`<section><h2>Raccourcis</h2><p class="note">S sélection · M mur · P pièce · espace main · R tourne le meuble sélectionné de 90° (Maj+R : 15°) · Ctrl pendant un glisser désactive l’aimantation aux murs · Suppr efface · Ctrl+Z annule.<br>Un mur dont l'épaisseur est du mauvais côté : sélectionner, puis « Inverser le côté ».</p></section>`;
+  } else if(sel.kind==='wall'){ const w=sel.obj,g=wgeo(w);
+    h+=`<section><h2>Mur <span class="pill">${w.id}</span></h2>
+      <div class="row">${num('w_x1','Début X',w.x1,.5)}${num('w_y1','Début Y',w.y1,.5)}${num('w_x2','Fin X',w.x2,.5)}${num('w_y2','Fin Y',w.y2,.5)}</div>
+      <div class="row3">${num('w_L','Longueur',Math.round(g.L*10)/10,.5)}${num('w_t','Épaisseur',w.t,.5)}${num('w_h','Hauteur',w.h)}</div>
+      <p class="note">Modifier la longueur déplace la fin du mur (et les murs qui y sont attachés). Glisser les poignées rondes dans le plan fait de même.</p>
+      <div class="actions"><button id="flipSide">Inverser le côté</button><button id="splitWall">Couper au milieu</button><button id="roomFrom">Pièce auto</button><button id="delSel" class="danger">Supprimer</button></div></section>`;
+    h+=`<section><h2>Ouvertures sur ce mur</h2><div class="actions"><button data-add="fenetre">+ Fenêtre</button><button data-add="porte">+ Porte</button><button data-add="ouverture">+ Ouverture</button></div>
+      <p class="note">${wallOpenings(w).map(o=>`${TYPES[o.type].label} ${o.w} cm à ${o.pos} cm`).join('<br>')||'aucune'}</p></section>`;
+  } else if(sel.kind==='opening'){ const o=sel.obj,w=sel.wall||S.walls.find(x=>x.id===o.wall);
+    h+=`<section><h2>${TYPES[o.type].label} <span class="pill">${o.id}</span></h2>
+      <label class="f">Type<select id="o_type">${Object.keys(TYPES).map(k=>`<option value="${k}" ${k===o.type?'selected':''}>${TYPES[k].label}</option>`).join('')}</select></label>
+      <div class="row">${num('o_pos','Position depuis le début du mur',o.pos)}${num('o_w','Largeur',o.w)}${num('o_z0','Bas (allège)',o.z0)}${num('o_z1','Haut (linteau)',o.z1)}</div>
+      ${o.type==='porte'?`<div class="row"><label class="f">Charnière<select id="o_hinge"><option value="start" ${o.hinge!=='end'?'selected':''}>côté début du mur</option><option value="end" ${o.hinge==='end'?'selected':''}>côté fin du mur</option></select></label><label class="f">Ouvre<select id="o_out"><option value="in" ${!o.out?'selected':''}>vers la pièce</option><option value="out" ${o.out?'selected':''}>vers l'extérieur</option></select></label></div><div class="actions"><button id="o_mirror">Inverser le sens</button></div>`:''}
+      <p class="note">Mur ${w?w.id:'?'} · longueur ${w?fmt(wgeo(w).L):'?'} cm. Une ouverture pleine hauteur (0 → hauteur du mur) supprime le mur sur cette largeur.</p>
+      <div class="actions"><button id="delSel" class="danger">Supprimer</button></div></section>`;
+  } else if(sel.kind==='room'){ const r=sel.obj;
+    h+=`<section><h2>Pièce <span class="pill">${r.id}</span></h2><label class="f">Nom<input type="text" id="r_name" value="${r.name.replace(/"/g,'&quot;')}"></label>
+      <p class="note">Surface : ${(Math.abs(polyArea(r.pts))/1e4).toFixed(2)} m². Un point par ligne, « x y » en cm :</p><textarea id="r_pts">${r.pts.map(p=>p[0]+' '+p[1]).join('\n')}</textarea>
+      <div class="actions"><button id="r_apply">Appliquer les points</button><button id="delSel" class="danger">Supprimer</button></div></section>`;
+  } else if(sel.kind==='furn'){ const f=sel.obj;
+    h+=`<section><h2>Meuble <span class="pill">${f.id}</span></h2><label class="f">Nom<input type="text" id="f_name" value="${f.name.replace(/"/g,'&quot;')}"></label>
+      <div class="row">${num('f_x','Centre X',f.x)}${num('f_y','Centre Y',f.y)}</div>
+      <div class="row3">${num('f_w',f.shape==='L'?'Longueur totale':'Largeur',f.w)}${num('f_d',f.shape==='L'?'Profondeur assise':'Profondeur',f.d)}${num('f_h','Hauteur',f.h)}</div>
+      ${f.shape==='L'?`<div class="row3">${num('f_w2','Largeur du retour',f.w2||100)}${num('f_d2','Profondeur du retour',f.d2||180)}<label class="f">Angle (vu de devant)<select id="f_corner"><option value="gauche" ${f.corner!=='droite'?'selected':''}>à gauche</option><option value="droite" ${f.corner==='droite'?'selected':''}>à droite</option></select></label></div>`:''}
+      <div class="row">${num('f_rot','Rotation (°)',f.rot,15)}<label class="f">Couleur<input type="color" id="f_color" value="${f.color}"></label></div>
+      <div class="actions"><button id="rotFurn">Tourner 90° (R)</button><button id="snapFurn">Coller au mur</button><button id="dupFurn">Dupliquer</button><button id="delSel" class="danger">Supprimer</button></div></section>`;
+  }
+  side.innerHTML=h; bindSide();
+}
+function bindSide(){
+  const q=id=>document.getElementById(id), on=(id,fn)=>{const el=q(id); if(el)el.onclick=fn;};
+  const bindNum=(id,fn)=>{const el=q(id); if(!el)return; el.onchange=()=>{const v=parseFloat(el.value); if(isNaN(v))return; fn(v); commit(); renderSide();};};
+  bindNum('g_t',v=>S.t=v); bindNum('g_h',v=>S.h=v);
+  on('addFurn',()=>{const c=CATALOG[+q('cat').value]; const ctr=s2w(cv.width/devicePixelRatio/2,cv.height/devicePixelRatio/2); const f={id:uid('f'),name:c[0],x:Math.round(ctr[0]),y:Math.round(ctr[1]),w:c[1],d:c[2],h:c[3],rot:0,color:['#8a9bb0','#b89a6a','#9bb08a','#b08a9b','#8ab0ad'][S.furn.length%5]}; if(c[4]==='L'){f.shape='L';f.w2=100;f.d2=180;f.corner='gauche';} S.furn.push(f); sel={kind:'furn',obj:f}; commit(); renderSide();});
+  on('orient',()=>{const n=orientWalls(); commit(); renderSide(); toast(n?n+' mur(s) réorienté(s)':'Toutes les épaisseurs sont déjà vers l’extérieur');});
+  on('clearAll',()=>{S.walls=[];S.openings=[];S.rooms=[];S.furn=[];sel=null;commit();renderSide();});
+  on('resetAll',()=>{S=clone(INITIAL);sel=null;commit();renderSide();fit();});
+  on('delSel',deleteSel);
+  if(sel&&sel.kind==='wall'){ const w=sel.obj;
+    bindNum('w_x1',v=>moveVertex(w,0,v,w.y1)); bindNum('w_y1',v=>moveVertex(w,0,w.x1,v)); bindNum('w_x2',v=>moveVertex(w,1,v,w.y2)); bindNum('w_y2',v=>moveVertex(w,1,w.x2,v));
+    bindNum('w_L',v=>{const g=wgeo(w); moveVertex(w,1,Math.round((w.x1+g.ux*v)*10)/10,Math.round((w.y1+g.uy*v)*10)/10);});
+    bindNum('w_t',v=>w.t=v); bindNum('w_h',v=>w.h=v);
+    on('flipSide',()=>{w.side=-(w.side||1);commit();renderSide();});
+    on('splitWall',()=>{const g=wgeo(w),m=wp(w,g,g.L/2,0); const n={...clone(w),id:uid('w'),x1:m[0],y1:m[1]}; w.x2=m[0];w.y2=m[1]; for(const o of wallOpenings(w)) if(o.pos>=g.L/2){o.wall=n.id;o.pos-=g.L/2;} S.walls.push(n); commit(); renderSide();});
+    on('roomFrom',()=>{const pts=traceRoom(w); if(!pts){toast('Contour non fermé : les murs ne se rejoignent pas.');return;} S.rooms.push({id:uid('r'),name:'Pièce '+(S.rooms.length+1),pts:pts.map(p=>[p[0],p[1]])}); sel={kind:'room',obj:S.rooms[S.rooms.length-1]}; commit(); renderSide();});
+    side.querySelectorAll('[data-add]').forEach(b=>b.onclick=()=>{const t=b.dataset.add,g=wgeo(w); const o={id:uid('o'),wall:w.id,type:t,pos:Math.max(0,Math.round(g.L/2-45)),w:Math.min(90,Math.round(g.L)),z0:TYPES[t].z0,z1:t==='ouverture'?w.h:TYPES[t].z1}; S.openings.push(o); sel={kind:'opening',obj:o,wall:w}; commit(); renderSide();});
+  }
+  if(sel&&sel.kind==='opening'){ const o=sel.obj; const t=q('o_type'); if(t)t.onchange=()=>{o.type=t.value; o.z0=TYPES[o.type].z0; o.z1=o.type==='ouverture'?(S.walls.find(x=>x.id===o.wall)||{h:S.h}).h:TYPES[o.type].z1; commit(); renderSide();};
+    bindNum('o_pos',v=>o.pos=v); bindNum('o_w',v=>o.w=v); bindNum('o_z0',v=>o.z0=v); bindNum('o_z1',v=>o.z1=v);
+    const hg=q('o_hinge'); if(hg)hg.onchange=()=>{o.hinge=hg.value;commit();}; const ou=q('o_out'); if(ou)ou.onchange=()=>{o.out=ou.value==='out';commit();}; on('o_mirror',()=>{o.hinge=o.hinge==='end'?'start':'end';commit();renderSide();}); }
+  if(sel&&sel.kind==='room'){ const r=sel.obj; const n=q('r_name'); n.onchange=()=>{r.name=n.value;commit();};
+    on('r_apply',()=>{const pts=q('r_pts').value.split('\n').map(l=>l.trim().split(/[\s,;]+/).map(Number)).filter(p=>p.length===2&&!p.some(isNaN)); if(pts.length<3){toast('Il faut au moins 3 points.');return;} r.pts=pts; commit(); renderSide();}); }
+  if(sel&&sel.kind==='furn'){ const f=sel.obj; const n=q('f_name'); n.onchange=()=>{f.name=n.value;commit();}; const c=q('f_color'); c.onchange=()=>{f.color=c.value;commit();};
+    bindNum('f_x',v=>f.x=v); bindNum('f_y',v=>f.y=v); bindNum('f_w',v=>f.w=v); bindNum('f_d',v=>f.d=v); bindNum('f_h',v=>f.h=v); bindNum('f_rot',v=>f.rot=v); bindNum('f_w2',v=>f.w2=v); bindNum('f_d2',v=>f.d2=v); const fc=q('f_corner'); if(fc)fc.onchange=()=>{f.corner=fc.value;commit();};
+    on('rotFurn',()=>{f.rot=(f.rot+90)%360;snapFurn(f);commit();renderSide();}); on('snapFurn',()=>{snapFurn(f);commit();renderSide();});
+    on('dupFurn',()=>{const n={...clone(f),id:uid('f'),x:f.x+f.w+10}; S.furn.push(n); sel={kind:'furn',obj:n}; commit(); renderSide();}); }
+}
+function refresh(){ renderSide(); draw(); if(!v3.hidden)build3d(); }
+let toastT; function toast(m){ const t=document.getElementById('toast'); t.textContent=m; t.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),3000); }
+
+// ------------------------------------------------------------------ maillage (partagé 3D / STL)
+// repère maquette : x droite, y bas (comme le plan), z haut. Les triangles sont produits avec normale sortante.
+function prism(quad, z0, z1, out){
+  let p=quad.slice(); if(polyArea(p)<0)p.reverse(); // ordre tel que le dessus soit orienté vers +z après réflexion
+  const n=p.length, top=p.map(q=>[q[0],q[1],z1]), bot=p.map(q=>[q[0],q[1],z0]);
+  if(n<=4){ for(let i=1;i<n-1;i++){ out.push([top[0],top[i],top[i+1]]); out.push([bot[0],bot[i+1],bot[i]]); } }
+  else { for(const t of earClip(p)){ out.push([[t[0][0],t[0][1],z1],[t[1][0],t[1][1],z1],[t[2][0],t[2][1],z1]]); out.push([[t[0][0],t[0][1],z0],[t[2][0],t[2][1],z0],[t[1][0],t[1][1],z0]]); } }
+  for(let i=0;i<n;i++){ const j=(i+1)%n; out.push([bot[i],bot[j],top[j]]); out.push([bot[i],top[j],top[i]]); }
+}
+function buildTriangles(opt){ // opt: {floor, furn, slab, hmax}
+  const tris=[];
+  for(const w of S.walls) for(const pc of wallPieces(w)){ const z1=opt.hmax?Math.min(pc.z1,opt.hmax):pc.z1; if(z1>pc.z0) prism(pc.quad,pc.z0,z1,tris); }
+  if(opt.floor) for(const r of S.rooms) if(r.pts.length>=3) { // triangulation en éventail suffisante pour un contour simple convexe par morceaux ; sinon ear clipping
+    const ears=earClip(r.pts); for(const t of ears){ prism(t,-(opt.slab||1),0,tris); } }
+  if(opt.furn) for(const f of S.furn) prism(furnCorners(f),0,f.h,tris);
+  return tris;
+}
+function earClip(poly){ // retourne des triangles [a,b,c]
+  let p=poly.map(q=>[q[0],q[1]]); if(polyArea(p)<0)p.reverse(); const tris=[]; let guard=0;
+  while(p.length>3&&guard++<2000){ let found=false;
+    for(let i=0;i<p.length;i++){ const a=p[(i+p.length-1)%p.length],b=p[i],c=p[(i+1)%p.length]; if(polyArea([a,b,c])<=0)continue;
+      let ok=true; for(const q of p){ if(q===a||q===b||q===c)continue; if(inPoly(q,[a,b,c])){ok=false;break;} } if(!ok)continue;
+      tris.push([a,b,c]); p.splice(i,1); found=true; break; }
+    if(!found)break; }
+  if(p.length===3)tris.push(p); return tris;
+}
+function stlBinary(tris, scale){ // conversion vers repère impression : X=x, Y=-y, Z=z (réflexion → inversion de l'ordre)
+  const n=tris.length, buf=new ArrayBuffer(84+n*50), dv=new DataView(buf); dv.setUint32(80,n,true); let o=84;
+  for(const t of tris){ const v=[t[0],t[2],t[1]].map(q=>[q[0]*scale,-q[1]*scale,q[2]*scale]);
+    const ux=v[1][0]-v[0][0],uy=v[1][1]-v[0][1],uz=v[1][2]-v[0][2],vx=v[2][0]-v[0][0],vy=v[2][1]-v[0][1],vz=v[2][2]-v[0][2];
+    let nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx; const l=Math.hypot(nx,ny,nz)||1;
+    dv.setFloat32(o,nx/l,true);dv.setFloat32(o+4,ny/l,true);dv.setFloat32(o+8,nz/l,true);o+=12;
+    for(const q of v){dv.setFloat32(o,q[0],true);dv.setFloat32(o+4,q[1],true);dv.setFloat32(o+8,q[2],true);o+=12;}
+    dv.setUint16(o,0,true);o+=2; }
+  return buf;
+}
+
+// ------------------------------------------------------------------ vue 3D (three.js)
+const v3=document.getElementById('view3d'), cv3=document.getElementById('cv3');
+let renderer,scene,camera,orbit={theta:-0.8,phi:1.0,r:900,cx:220,cz:350},meshes=[];
+function init3d(){ if(renderer)return; renderer=new THREE.WebGLRenderer({canvas:cv3,antialias:true}); scene=new THREE.Scene(); camera=new THREE.PerspectiveCamera(45,1,5,20000);
+  scene.add(new THREE.HemisphereLight(0xffffff,0x667788,0.9)); const d=new THREE.DirectionalLight(0xffffff,0.7); d.position.set(300,800,500); scene.add(d);
+  let dr=null; cv3.addEventListener('pointerdown',e=>{cv3.setPointerCapture(e.pointerId);dr={x:e.clientX,y:e.clientY,b:e.button,sh:e.shiftKey};});
+  cv3.addEventListener('pointermove',e=>{ if(!dr)return; const dx=e.clientX-dr.x,dy=e.clientY-dr.y; dr.x=e.clientX;dr.y=e.clientY;
+    if(dr.b===2||dr.sh){ const s=orbit.r*0.0015; orbit.cx-=(dx*Math.cos(orbit.theta)-dy*Math.sin(orbit.theta))*s*-1; orbit.cz-=(dx*Math.sin(orbit.theta)+dy*Math.cos(orbit.theta))*s*-1; }
+    else { orbit.theta-=dx*0.006; orbit.phi=Math.max(0.05,Math.min(1.55,orbit.phi-dy*0.006)); } render3d(); });
+  const up=()=>dr=null; cv3.addEventListener('pointerup',up); cv3.addEventListener('pointercancel',up); cv3.addEventListener('contextmenu',e=>e.preventDefault());
+  cv3.addEventListener('wheel',e=>{e.preventDefault(); orbit.r=Math.max(100,Math.min(8000,orbit.r*Math.exp(e.deltaY*0.001))); render3d();},{passive:false});
+  document.getElementById('furn3d').onchange=build3d; document.getElementById('floor3d').onchange=build3d;
+}
+function build3d(){ init3d(); for(const m of meshes)scene.remove(m); meshes=[];
+  const add=(tris,color,opacity)=>{ if(!tris.length)return; const arr=new Float32Array(tris.length*9); let i=0; for(const t of tris) for(const q of [t[0],t[2],t[1]]){arr[i++]=q[0];arr[i++]=q[2];arr[i++]=q[1];}
+    const g=new THREE.BufferGeometry(); g.setAttribute('position',new THREE.BufferAttribute(arr,3)); g.computeVertexNormals();
+    const m=new THREE.Mesh(g,new THREE.MeshLambertMaterial({color,transparent:opacity<1,opacity})); scene.add(m); meshes.push(m);
+    const e=new THREE.LineSegments(new THREE.EdgesGeometry(g,20),new THREE.LineBasicMaterial({color:0x222222,transparent:true,opacity:.35})); scene.add(e); meshes.push(e); };
+  const walls=[]; for(const w of S.walls) for(const pc of wallPieces(w)) prism(pc.quad,pc.z0,pc.z1,walls); add(walls,0xd8d6cf,1);
+  if(document.getElementById('floor3d').checked){ const fl=[]; for(const r of S.rooms) if(r.pts.length>=3) for(const t of earClip(r.pts)) prism(t,-2,0,fl); add(fl,0xc9b48a,1); }
+  if(document.getElementById('furn3d').checked) for(const f of S.furn){ const t=[]; prism(furnCorners(f),0,f.h,t); add(t,new THREE.Color(f.color).getHex(),1); }
+  const grid=new THREE.GridHelper(2000,40,0x888888,0xcccccc); grid.position.y=-2.5; scene.add(grid); meshes.push(grid);
+  // centre la caméra
+  const xs=[],ys=[]; for(const w of S.walls){xs.push(w.x1,w.x2);ys.push(w.y1,w.y2);} if(xs.length){orbit.cx=(Math.min(...xs)+Math.max(...xs))/2; orbit.cz=(Math.min(...ys)+Math.max(...ys))/2; if(!orbit.auto){orbit.r=Math.max(600,1.6*Math.max(Math.max(...xs)-Math.min(...xs),Math.max(...ys)-Math.min(...ys)));orbit.auto=true;}}
+  render3d(); }
+function render3d(){ if(!renderer||v3.hidden)return; const r=cv3.getBoundingClientRect(); if(cv3.width!==Math.round(r.width*devicePixelRatio)){renderer.setSize(r.width,r.height,false); camera.aspect=r.width/r.height; camera.updateProjectionMatrix();}
+  scene.background=new THREE.Color(css('--paper'));
+  camera.position.set(orbit.cx+orbit.r*Math.cos(orbit.phi)*Math.sin(orbit.theta), orbit.r*Math.sin(orbit.phi), orbit.cz+orbit.r*Math.cos(orbit.phi)*Math.cos(orbit.theta)); camera.lookAt(orbit.cx,60,orbit.cz); renderer.render(scene,camera); }
+document.getElementById('btn3d').onclick=()=>{ if(typeof THREE==='undefined'){toast('Bibliothèque 3D non chargée (hors ligne ?)');return;} v3.hidden=false; build3d(); };
+document.getElementById('close3d').onclick=()=>{ v3.hidden=true; resize(); };
+
+// ------------------------------------------------------------------ export / sauvegarde
+let dl=null; (async()=>{ try{ dl=window.claude&&window.claude.use?await window.claude.use('downloads'):null; }catch(e){dl=null;} })();
+async function saveFile(name,data){ // via la capacité downloads, sinon lien de téléchargement (fichier ouvert localement)
+  if(dl){ try{ await dl.save({filename:name,data}); toast('Fichier enregistré : '+name); return; }catch(e){ if(e&&e.code==='declined')return; if(e&&e.code!=='unavailable'){toast('Téléchargement impossible ('+(e.code||e.message)+')');return;} } }
+  const blob=data instanceof Blob?data:new Blob([data]); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},1000); }
+document.getElementById('btnSave').onclick=()=>saveFile('plan.json',JSON.stringify(S,null,1));
+document.getElementById('btnLoad').onclick=()=>document.getElementById('fileLoad').click();
+document.getElementById('fileLoad').onchange=e=>{ const f=e.target.files[0]; if(!f)return; const r=new FileReader(); r.onload=()=>{ try{ const d=JSON.parse(r.result); if(!d.walls)throw 0; S=d; sel=null; orientWalls(); commit(); renderSide(); fit(); toast('Plan chargé'); }catch(err){toast('Fichier JSON invalide');} }; r.readAsText(f); e.target.value=''; };
+document.getElementById('btnExport').onclick=()=>{ sel=null; draw();
+  side.innerHTML=`<section><h2>Impression 3D (STL)</h2>
+    <div class="row">${num('e_scale','Échelle 1:N',50)}${num('e_slab','Dalle (mm imprimés)',1.5,.5)}</div>
+    <div class="row">${num('e_hmax','Hauteur max des murs (cm réels, 0 = tout)',0)}<label class="f">Contenu<select id="e_what"><option value="walls">Murs + dalle</option><option value="all">Murs + dalle + meubles</option><option value="furn">Meubles seuls</option></select></label></div>
+    <p class="note" id="e_info"></p>
+    <div class="actions"><button id="e_stl">Exporter STL (zip)</button><button id="e_png">Image du plan (PNG)</button><button id="e_back">Retour</button></div>
+    <p class="note">Le STL est en millimètres, déjà à l'échelle. Il est livré dans un zip (format accepté ici) : décompresser puis ouvrir dans le slicer. Les pièces donnent la dalle, les murs sont pleins, les ouvertures sont découpées.</p></section>`;
+  const info=()=>{ const sc=+document.getElementById('e_scale').value||50; const xs=[],ys=[]; for(const w of S.walls){xs.push(w.x1,w.x2);ys.push(w.y1,w.y2);} if(!xs.length)return; const W=(Math.max(...xs)-Math.min(...xs)+2*S.t)*10/sc,D=(Math.max(...ys)-Math.min(...ys)+2*S.t)*10/sc,H=Math.max(...S.walls.map(w=>w.h))*10/sc; document.getElementById('e_info').textContent=`Encombrement imprimé : ${W.toFixed(0)} × ${D.toFixed(0)} × ${H.toFixed(0)} mm (murs de ${(S.t*10/sc).toFixed(1)} mm)`; };
+  info(); document.getElementById('e_scale').oninput=info;
+  document.getElementById('e_back').onclick=renderSide;
+  document.getElementById('e_stl').onclick=async()=>{ const sc=+document.getElementById('e_scale').value||50, what=document.getElementById('e_what').value, hmax=+document.getElementById('e_hmax').value||0, slabmm=+document.getElementById('e_slab').value||0;
+    const tris=buildTriangles({floor:what!=='furn',furn:what!=='walls',slab:slabmm*sc/10,hmax}); if(!tris.length){toast('Rien à exporter');return;}
+    const stl=stlBinary(tris,10/sc); if(typeof JSZip==='undefined'){saveFile(`plan_1-${sc}.stl`,stl);return;} const zip=new JSZip(); zip.file(`plan_1-${sc}.stl`,stl); const blob=await zip.generateAsync({type:'blob'}); saveFile(`plan_1-${sc}_stl.zip`,blob); };
+  document.getElementById('e_png').onclick=()=>{ cv.toBlob(b=>saveFile('plan.png',b),'image/png'); };
+};
+
+// ------------------------------------------------------------------ démarrage
+loadInitial(); hist=[clone(S)]; hpos=0; renderSide(); setMode('select');
+window.addEventListener('resize',()=>{resize(); if(!v3.hidden)render3d();}); resize(); fit();
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{draw();render3d();});
+</script>
+
+</body>
+</html>
