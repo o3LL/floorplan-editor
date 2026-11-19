@@ -4,7 +4,7 @@
 
 A single-file, in-browser floor plan editor that exports 3D-printable STL models. No build step, no server: open `index.html`.
 
-The interface is in French; all dimensions are in centimetres, measured from the inside of the room.
+All dimensions are in centimetres, measured from the inside of the room.
 
 ## Features
 
@@ -19,7 +19,7 @@ The interface is in French; all dimensions are in centimetres, measured from the
 
 Open `index.html` in a browser, or serve the folder with any static server (GitHub Pages works as is). The 3D view and zipped STL export load three.js r128 and JSZip 3.10.1 from cdnjs, so they need a network connection; everything else works offline.
 
-`examples/simple-room.json` is a sample plan to load with the "Charger JSON" (Load JSON) button.
+`examples/simple-room.json` is a sample plan to load with the "Load JSON" button.
 
 ## Shortcuts
 
@@ -34,12 +34,12 @@ Open `index.html` in a browser, or serve the folder with any static server (GitH
 
 ## Plan format
 
-A plan is one JSON object: `walls` (`x1,y1,x2,y2`, thickness `t`, height `h`, `side` = which side the thickness goes), `openings` (attached to a wall by id, `pos` and `w` along it, `z0`/`z1` heights, `type` among `fenetre` (window), `porte` (door), `ouverture` (opening)), `rooms` (polygon `pts`) and `furn` (centre `x,y`, `w`, `d`, `h`, `rot` in degrees; `shape: "L"` with `w2`, `d2`, `corner` for corner sofas). The y axis points down, as on screen.
+A plan is one JSON object: `walls` (`x1,y1,x2,y2`, thickness `t`, height `h`, `side` = which side the thickness goes), `openings` (attached to a wall by id, `pos` and `w` along it, `z0`/`z1` heights, `type` among `fenetre` (window), `porte` (door), `ouverture` (opening); these keys are kept from the original French version so older plans still load), `rooms` (polygon `pts`) and `furn` (centre `x,y`, `w`, `d`, `h`, `rot` in degrees; `shape: "L"` with `w2`, `d2`, `corner` = `gauche` (left) or `droite` (right) for corner sofas). The y axis points down, as on screen.
 
 ## Limitations
 
 - Walls and slab overlap slightly in the STL instead of being a single fused solid; slicers merge them.
-- A room polygon only follows a wall if its vertices coincide with the wall corners; after moving walls, recreate it with "Pièce auto" (Auto room).
+- A room polygon only follows a wall if its vertices coincide with the wall corners; after moving walls, recreate it with "Auto room".
 - Furniture is exported as extruded blocks.
 
 ## License
